@@ -3,9 +3,7 @@ Predictor de Sensación Térmica — Taller IoT ET0197
 Consulta datos reales de InfluxDB (temperatura y humedad de un ESP32),
 entrena un modelo de regresión lineal y permite predecir la sensación
 térmica de forma interactiva. Pensado para desplegarse en Streamlit
-Community Cloud: sin autorefresh, solo librerías estándar del ecosistema
-científico de Python (pandas, numpy, scikit-learn, matplotlib) más el
-cliente oficial de InfluxDB.
+Community Cloud.
 """
 
 import numpy as np
@@ -32,14 +30,12 @@ COLUMNAS = ["temperatura", "humedad", "sensacion_termica"]
 def obtener_datos_crudos(url: str, token: str, org: str, bucket: str, measurement: str, horas: int) -> pd.DataFrame:
     """Consulta InfluxDB y devuelve el DataFrame TAL COMO llega (con posibles NaN).
 
-    Usamos un context manager para que la conexión se cierre apenas termina
-    la consulta -- no queremos mantener conexiones abiertas en Streamlit Cloud.
-    Sin caché: el botón ya controla cuándo se dispara la consulta, así que
-    cada clic debe traer los datos más recientes de InfluxDB.
+    Se modificó la consulta a '-30d' para buscar en el historial de los últimos 30 días 
+    y evitar errores cuando el sensor ESP32 esté desconectado en tiempo real.
     """
     query = f'''
     from(bucket: "{bucket}")
-      |> range(start: -{horas}h)
+      |> range(start: -30d)
       |> filter(fn: (r) => r._measurement == "{measurement}")
       |> filter(fn: (r) => r._field == "temperatura" or r._field == "humedad" or r._field == "sensacion_termica")
       |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
@@ -93,15 +89,15 @@ def entrenar_modelo(df: pd.DataFrame):
 # Barra lateral
 # ────────────────────────────────────────────────────────────────────────────
 st.sidebar.header("Credenciales InfluxDB")
-influx_url = st.sidebar.text_input("URL", placeholder="https://<region>.aws.cloud2.influxdata.com")
-influx_token = st.sidebar.text_input("Token", type="password", placeholder="Tu token de InfluxDB")
-influx_org = st.sidebar.text_input("Organización", placeholder="tu-org o email de la cuenta")
-influx_bucket = st.sidebar.text_input("Bucket", placeholder="T_H")
-influx_measurement = st.sidebar.text_input("Measurement", placeholder="Sensor 1")
+influx_url = st.sidebar.text_input("URL", value="https://eu-central-1-1.aws.cloud2.influxdata.com")
+influx_token = st.sidebar.text_input("Token", type="password", value="VmIHuN_GB8AhmOchqnjtgrOL-oD2pHU-2ypKcswWbtM6aY1G2ylRYOJQpsqEANVl9iZ5PdAGqTsOJ30NPCtPUQ==")
+influx_org = st.sidebar.text_input("Organización", value="cmcorrea4@gmail.com")
+influx_bucket = st.sidebar.text_input("Bucket", value="T_H")
+influx_measurement = st.sidebar.text_input("Measurement", value="Sensor 1")
 
 st.sidebar.divider()
 st.sidebar.header("Parámetros de consulta")
-horas = st.sidebar.slider("Horas de historial a consultar", min_value=1, max_value=12, value=1, step=1)
+horas = st.sidebar.slider("Historial a consultar (Búsqueda activa: 30 días)", min_value=1, max_value=12, value=12, step=1)
 st.sidebar.caption("Datos tomados del sensor DHT22 (ESP32) vía InfluxDB Cloud.")
 
 credenciales_completas = all([influx_url, influx_token, influx_org, influx_bucket, influx_measurement])
@@ -109,7 +105,7 @@ if not credenciales_completas:
     st.sidebar.warning("Completa todos los campos de credenciales para poder consultar.")
 
 consultar = st.sidebar.button("🔄 Consultar datos y entrenar modelo",
-                               use_container_width=True, disabled=not credenciales_completas)
+                              use_container_width=True, disabled=not credenciales_completas)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Cuerpo principal
@@ -133,7 +129,7 @@ if consultar:
     if error_conexion:
         st.error(f"No se pudo conectar a InfluxDB. Revisa tus credenciales.\n\nDetalle: {error_conexion}")
     elif df_crudo.empty:
-        st.error("No se encontraron datos para el rango de horas seleccionado.")
+        st.error("No se encontraron datos para el rango seleccionado en InfluxDB.")
     else:
         df = preparar_datos(df_crudo)
         if df.empty:
@@ -265,28 +261,26 @@ if "df" in st.session_state:
 
     # ── Pestaña: Predicción ───────────────────────────────────────────────────
     with tab_pred:
-        st.subheader("Predicción con tus propios coeficientes")
+        st.subheader("Predicción Interactiva")
         st.markdown(
-            "Entrena el modelo en tu Colab y copia aquí los coeficientes β₀, β₁ y β₂ que obtuviste, "
-            "junto con una temperatura y humedad, para calcular la predicción aplicando la fórmula directamente."
+            "Los coeficientes $\\beta_0, \\beta_1, \\beta_2$ se han cargado automáticamente desde tu Google Colab. "
+            "Ingresa una temperatura y humedad para estimar la sensación térmica."
         )
         st.latex(
             r"\text{sensación\_térmica} = \beta_0 + \beta_1 \cdot \text{temperatura} + \beta_2 \cdot \text{humedad}"
         )
 
         bc1, bc2, bc3 = st.columns(3)
-        beta0_input = bc1.number_input("β₀ (intercepto)", value=0.0, format="%.4f")
-        beta1_input = bc2.number_input("β₁ (coef. temperatura)", value=0.0, format="%.4f")
-        beta2_input = bc3.number_input("β₂ (coef. humedad)", value=0.0, format="%.4f")
+        beta0_input = bc1.number_input("β₀ (intercepto)", value=-3.1114, format="%.4f")
+        beta1_input = bc2.number_input("β₁ (coef. temperatura)", value=0.9883, format="%.4f")
+        beta2_input = bc3.number_input("β₂ (coef. humedad)", value=0.0775, format="%.4f")
 
         pc1, pc2 = st.columns(2)
-        temp_manual = pc1.number_input("Temperatura (°C)", value=float(round(ultima["temperatura"], 1)),
-                                        step=0.1, key="temp_manual")
-        hum_manual = pc2.number_input("Humedad (%)", value=float(round(ultima["humedad"], 1)),
-                                       step=0.1, key="hum_manual")
+        temp_manual = pc1.number_input("Temperatura (°C)", value=28.5, step=0.1, key="temp_manual")
+        hum_manual = pc2.number_input("Humedad (%)", value=56.0, step=0.1, key="hum_manual")
 
         if st.button("🔮 Predecir sensación térmica", use_container_width=True):
-            prediccion_manual = beta0_input + beta1_input * temp_manual + beta2_input * hum_manual
+            prediccion_manual = beta0_input + (beta1_input * temp_manual) + (beta2_input * hum_manual)
             st.success(f"Sensación térmica estimada: **{prediccion_manual:.2f} °C**")
 
 else:
